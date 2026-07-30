@@ -7,10 +7,16 @@ import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   type ExtensionAPI,
+  type ExtensionUIContext,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { applyResultEvent, createResultState, resultStatus, type ResultState } from "./result-state.ts";
+import {
+  renderEventsCall, renderEventsResult, renderKillCall, renderKillResult, renderListCall, renderListResult,
+  renderResultCall, renderResultResult, renderRpcCall, renderRpcResult, renderSpawnCall, renderSpawnResult,
+} from "./ui/renderers.ts";
+import { footerParts, footerText, footerTone } from "./ui/status.ts";
 
 type JsonObject = Record<string, unknown>;
 
@@ -60,6 +66,7 @@ interface ChildAgent {
   waiters: Set<EventWaiter>;
   closed: Promise<void>;
   resolveClosed: () => void;
+  refreshStatus: () => void;
 }
 
 const READ_ONLY_TOOLS = "read,grep,find,ls";
@@ -167,6 +174,10 @@ function appendEvent(child: ChildAgent, event: JsonObject): void {
     child.lastAssistantText = assistantText(event.message);
   }
 
+  if (["agent_start", "agent_settled", "message_end", "process_exit", "process_error"].includes(type)) {
+    child.refreshStatus();
+  }
+
   if (!shouldStoreEvent(event)) return;
 
   const item = {
@@ -235,7 +246,9 @@ function attachJsonlReader(child: ChildAgent): void {
 
         if (value.command === "get_state" && value.success === true && isJsonObject(value.data)) {
           child.lastState = value.data;
+          const wasStreaming = child.isStreaming;
           child.isStreaming = value.data.isStreaming === true;
+          if (child.isStreaming !== wasStreaming) child.refreshStatus();
         }
         if (
           value.command === "get_last_assistant_text"
@@ -310,9 +323,15 @@ async function sendRpc(
 
   const changesStreaming = ["prompt", "steer", "follow_up"].includes(commandType);
   const previousStreaming = child.isStreaming;
-  if (changesStreaming) child.isStreaming = true;
+  if (changesStreaming) {
+    child.isStreaming = true;
+    child.refreshStatus();
+  }
   const restoreStreaming = () => {
-    if (changesStreaming) child.isStreaming = previousStreaming;
+    if (changesStreaming) {
+      child.isStreaming = previousStreaming;
+      child.refreshStatus();
+    }
   };
 
   return new Promise<JsonObject>((resolveResponse, rejectResponse) => {
@@ -495,6 +514,24 @@ const IdParameters = Type.Object({
 export default function rpcSubagents(pi: ExtensionAPI): void {
   const children = new Map<string, ChildAgent>();
   let childNumber = 0;
+  let tuiUi: ExtensionUIContext | null = null;
+
+  const refreshFooter = () => {
+    if (!tuiUi) return;
+    const parts = footerParts([...children.values()].map((child) => ({
+      alive: child.alive,
+      isStreaming: child.isStreaming,
+      stopReason: child.resultState.stopReason,
+    })));
+    const label = footerText(parts);
+    if (!label) {
+      tuiUi.setStatus("rpc-subagents", undefined);
+      return;
+    }
+    const tone = footerTone(parts);
+    const marker = tone === "error" ? "✗" : tone === "success" ? "✓" : tone === "muted" ? "○" : "●";
+    tuiUi.setStatus("rpc-subagents", `${tuiUi.theme.fg(tone, marker)} ${tuiUi.theme.fg("dim", label)}`);
+  };
 
   const getChild = (id: string): ChildAgent => {
     const child = children.get(id);
@@ -558,8 +595,10 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
         waiters: new Set(),
         closed,
         resolveClosed,
+        refreshStatus: refreshFooter,
       };
       children.set(id, child);
+      refreshFooter();
       attachJsonlReader(child);
 
       processHandle.stderr.on("data", (chunk: Buffer | string) => {
@@ -631,6 +670,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
         if (signal) signal.removeEventListener("abort", abortSpawn);
       }
     },
+    renderCall: renderSpawnCall,
+    renderResult: renderSpawnResult,
   });
 
   pi.registerTool({
@@ -644,6 +685,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
       const response = await sendRpc(child, params.command, params.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS, signal);
       return renderJson({ id: child.id, response }, { id: child.id });
     },
+    renderCall: renderRpcCall,
+    renderResult: renderRpcResult,
   });
 
   pi.registerTool({
@@ -722,6 +765,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
         stderr: child.stderr || undefined,
       }, { id: child.id, nextSequence });
     },
+    renderCall: renderEventsCall,
+    renderResult: renderEventsResult,
   });
 
   pi.registerTool({
@@ -776,6 +821,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
         latestSequence: child.nextSequence,
       }, { id: child.id, latestSequence: child.nextSequence });
     },
+    renderCall: renderResultCall,
+    renderResult: renderResultResult,
   });
 
   pi.registerTool({
@@ -786,6 +833,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
     async execute() {
       return renderJson({ children: [...children.values()].map(childSummary) });
     },
+    renderCall: renderListCall,
+    renderResult: renderListResult,
   });
 
   pi.registerTool({
@@ -796,11 +845,25 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
     async execute(_toolCallId, params) {
       const child = getChild(params.id);
       await stopChild(child);
+      refreshFooter();
       return renderJson(childSummary(child), { id: child.id });
     },
+    renderCall: renderKillCall,
+    renderResult: renderKillResult,
   });
 
-  pi.on("session_shutdown", async () => {
+  pi.on("session_start", (_event, ctx) => {
+    if (ctx.mode === "tui" && process.env.PI_RPC_SUBAGENT !== "1") {
+      tuiUi = ctx.ui;
+      refreshFooter();
+    }
+  });
+
+  pi.on("session_shutdown", async (_event, ctx) => {
+    if (ctx.mode === "tui" && process.env.PI_RPC_SUBAGENT !== "1") {
+      ctx.ui.setStatus("rpc-subagents", undefined);
+    }
+    tuiUi = null;
     await Promise.all([...children.values()].map((child) => stopChild(child)));
     children.clear();
   });
