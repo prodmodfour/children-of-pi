@@ -7,6 +7,7 @@ A [Pi](https://github.com/earendil-works/pi-mono) extension for running persiste
 - Spawn independent read-only or writable child agents
 - Send RPC commands while agents keep running in the background
 - Read structured events using byte-budgeted sequence cursors
+- Fetch compact final results without replaying lifecycle traces
 - Detect expired cursors and dropped events after buffer rollover
 - Wait for activity or agent settlement
 - Inspect and terminate child processes
@@ -33,15 +34,16 @@ Pi packages execute with your system permissions. Review the source before insta
 | --- | --- |
 | `subagent_spawn` | Start a persistent child agent, optionally with an initial task |
 | `subagent_rpc` | Send any supported Pi RPC command to a child |
-| `subagent_events` | Read or wait for structured child events |
-| `subagent_list` | List child agents and their current state |
+| `subagent_events` | Read or wait for structured child events (trace view) |
+| `subagent_result` | Wait for and return a compact answer, usage, status, errors, and changed files |
+| `subagent_list` | List child agents with lifecycle state and answer previews |
 | `subagent_kill` | Terminate a child process |
 
 ## Example workflow
 
 1. Spawn a read-only child with a research task.
-2. Poll `subagent_events` with `wait: "settled"`; continue from its `nextSequence` cursor.
-3. Check `cursorExpired`/`eventsDropped` before consuming events, then read `lastAssistantText` or request additional state with `subagent_rpc`.
+2. Call `subagent_result` for the normal compact answer path; it waits for settlement by default.
+3. Use `subagent_events` when you need the raw trace, continuing from its `nextSequence` cursor and checking `cursorExpired`/`eventsDropped`.
 4. Send follow-up prompts or terminate the child.
 
 Writable children receive Pi's normal tool set. Read-only children are restricted to `read`, `grep`, `find`, and `ls`.

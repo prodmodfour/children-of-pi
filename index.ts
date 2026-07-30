@@ -48,6 +48,8 @@ interface ChildAgent {
   exitSignal: NodeJS.Signals | null;
   stderr: string;
   lastAssistantText: string | null;
+  lastStopReason: string | null;
+  changedFiles: Set<string>;
   lastState: JsonObject | null;
   nextSequence: number;
   readCursor: number;
@@ -68,6 +70,7 @@ const EVENT_RESPONSE_BUDGET_BYTES = DEFAULT_MAX_BYTES - 4 * 1024;
 const MAX_STDERR_BYTES = 50 * 1024;
 const DEFAULT_RPC_TIMEOUT_MS = 120_000;
 const DEFAULT_WAIT_TIMEOUT_MS = 60_000;
+const SUMMARY_PREVIEW_CHARS = 500;
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -159,7 +162,17 @@ function appendEvent(child: ChildAgent, event: JsonObject): void {
 
   if (type === "message_end") {
     const text = assistantText(event.message);
-    if (text !== null) child.lastAssistantText = text;
+    if (text !== null) {
+      child.lastAssistantText = text;
+      if (isJsonObject(event.message) && typeof event.message.stopReason === "string") {
+        child.lastStopReason = event.message.stopReason;
+      }
+    }
+  }
+
+  if (type === "tool_execution_start" && ["edit", "write"].includes(String(event.toolName))) {
+    const args = isJsonObject(event.args) ? event.args : null;
+    if (args && typeof args.path === "string") child.changedFiles.add(resolve(child.cwd, args.path));
   }
 
   if (!shouldStoreEvent(event)) return;
@@ -420,6 +433,11 @@ async function stopChild(child: ChildAgent): Promise<void> {
   }
 }
 
+function textPreview(value: string | null): string | null {
+  if (value === null || value.length <= SUMMARY_PREVIEW_CHARS) return value;
+  return `${value.slice(0, SUMMARY_PREVIEW_CHARS)}…`;
+}
+
 function childSummary(child: ChildAgent): JsonObject {
   return {
     id: child.id,
@@ -432,7 +450,7 @@ function childSummary(child: ChildAgent): JsonObject {
     exitCode: child.exitCode,
     exitSignal: child.exitSignal,
     lastEventSequence: child.nextSequence,
-    lastAssistantText: child.lastAssistantText,
+    lastAssistantTextPreview: textPreview(child.lastAssistantText),
     state: child.lastState === null
       ? null
       : { ...child.lastState, isStreaming: child.isStreaming },
@@ -463,12 +481,19 @@ const RpcParameters = Type.Object({
 const EventsParameters = Type.Object({
   id: Type.String({ description: "Child id returned by subagent_spawn." }),
   after: Type.Optional(Type.Integer({ minimum: 0, description: "Sequence cursor. Omit to continue from the last read." })),
+  includeLastAssistantText: Type.Optional(Type.Boolean({ description: "Include the complete last assistant answer. Defaults to false." })),
   wait: Type.Optional(StringEnum(["none", "event", "settled"] as const, {
     description: "Optionally wait for any new event or until the child settles.",
     default: "none",
   })),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0, description: "Wait timeout in milliseconds." })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, description: "Maximum events returned." })),
+});
+
+const ResultParameters = Type.Object({
+  id: Type.String({ description: "Child id returned by subagent_spawn." }),
+  wait: Type.Optional(Type.Boolean({ description: "Wait for the child to settle before returning. Defaults to true." })),
+  timeoutMs: Type.Optional(Type.Integer({ minimum: 0, description: "Settlement wait timeout in milliseconds." })),
 });
 
 const IdParameters = Type.Object({
@@ -530,6 +555,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
         exitSignal: null,
         stderr: "",
         lastAssistantText: null,
+        lastStopReason: null,
+        changedFiles: new Set(),
         lastState: null,
         nextSequence: 0,
         readCursor: 0,
@@ -671,7 +698,7 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
           eventsDropped: cursorExpired ? Math.max(0, oldestSequence - after - 1) : 0,
           hasMore: available.length > candidate.length,
           events: candidate,
-          lastAssistantText: child.lastAssistantText,
+          lastAssistantText: params.includeLastAssistantText ? child.lastAssistantText : undefined,
           stderr: child.stderr || undefined,
         };
         const serialized = JSON.stringify(probe, null, 2);
@@ -700,9 +727,58 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
         eventsDropped: cursorExpired ? Math.max(0, oldestSequence - after - 1) : 0,
         hasMore: available.length > returned.length,
         events: returned,
-        lastAssistantText: child.lastAssistantText,
+        lastAssistantText: params.includeLastAssistantText ? child.lastAssistantText : undefined,
         stderr: child.stderr || undefined,
       }, { id: child.id, nextSequence });
+    },
+  });
+
+  pi.registerTool({
+    name: "subagent_result",
+    label: "Subagent Result",
+    description: "Get a compact final-result view for a child: status, answer, usage, errors, and latest event sequence. Waits for settlement by default.",
+    parameters: ResultParameters,
+    async execute(_toolCallId, params, signal) {
+      const child = getChild(params.id);
+      const shouldWait = params.wait !== false;
+      const timeoutMs = params.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
+      const isSettlement = (item: StoredEvent) =>
+        ["agent_settled", "process_exit"].includes(String(item.event.type));
+
+      if (shouldWait && child.isStreaming) {
+        await waitForEvent(child, child.nextSequence, isSettlement, timeoutMs, signal);
+      }
+
+      let statsResponse: JsonObject | null = null;
+      if (child.alive) {
+        statsResponse = await sendRpc(child, { type: "get_session_stats" }, DEFAULT_RPC_TIMEOUT_MS, signal);
+      }
+      const stats = statsResponse?.success === true && isJsonObject(statsResponse.data)
+        ? statsResponse.data
+        : null;
+      const tokens = stats && isJsonObject(stats.tokens) ? stats.tokens : null;
+      const error = child.alive || child.exitCode === 0
+        ? null
+        : `Subagent exited (code=${child.exitCode}, signal=${child.exitSignal}).${child.stderr ? ` ${child.stderr}` : ""}`;
+      const status = child.isStreaming ? "running" : child.alive ? "settled" : "exited";
+
+      return renderJson({
+        id: child.id,
+        status,
+        answer: child.lastAssistantText,
+        stopReason: child.isStreaming ? null : child.lastStopReason,
+        usage: stats === null ? null : {
+          inputTokens: tokens?.input ?? null,
+          outputTokens: tokens?.output ?? null,
+          cacheReadTokens: tokens?.cacheRead ?? null,
+          cacheWriteTokens: tokens?.cacheWrite ?? null,
+          totalTokens: tokens?.total ?? null,
+          cost: stats.cost ?? null,
+        },
+        changedFiles: [...child.changedFiles],
+        error,
+        latestSequence: child.nextSequence,
+      }, { id: child.id, latestSequence: child.nextSequence });
     },
   });
 
