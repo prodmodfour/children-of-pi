@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { applyResultEvent, createResultState, resultStatus, type ResultState } from "./result-state.ts";
+import { assertAllowedChildRpcCommand } from "./rpc-policy.ts";
 import {
   renderEventsCall, renderEventsResult, renderKillCall, renderKillResult, renderListCall, renderListResult,
   renderResultCall, renderResultResult, renderRpcCall, renderRpcResult, renderSpawnCall, renderSpawnResult,
@@ -482,7 +483,7 @@ const RpcParameters = Type.Object({
   command: Type.Any({
     description: [
       "A Pi RPC command object. Common types: prompt, steer, follow_up, abort, get_state, get_messages,",
-      "get_entries, get_last_assistant_text, get_session_stats, set_model, set_thinking_level, compact, new_session.",
+      "get_entries, get_last_assistant_text, get_session_stats, compact, new_session.",
       "For extension_ui_response, preserve the request id from the child event.",
     ].join(" "),
   }),
@@ -552,10 +553,6 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
 
       const id = `agent-${++childNumber}`;
       const args = ["--mode", "rpc", "--no-session"];
-      if (ctx.model) {
-        args.push("--provider", ctx.model.provider, "--model", ctx.model.id);
-      }
-      if (ctx.thinkingLevel) args.push("--thinking", ctx.thinkingLevel);
       if (!params.write) args.push("--tools", READ_ONLY_TOOLS);
       if (ctx.isProjectTrusted()) args.push("--approve");
 
@@ -682,6 +679,7 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
     async execute(_toolCallId, params, signal) {
       const child = getChild(params.id);
       if (!isJsonObject(params.command)) throw new Error("command must be a JSON object.");
+      assertAllowedChildRpcCommand(params.command);
       const response = await sendRpc(child, params.command, params.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS, signal);
       return renderJson({ id: child.id, response }, { id: child.id });
     },

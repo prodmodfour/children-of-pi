@@ -11,7 +11,8 @@ A [Pi](https://github.com/earendil-works/pi-mono) extension for running persiste
 - Detect expired cursors and dropped events after buffer rollover
 - Wait for activity or agent settlement
 - Inspect and terminate child processes
-- Inherit the parent model, thinking level, and project trust
+- Use each child Pi's configured model, thinking level, and settings without overriding them
+- Inherit project trust from the parent
 - Automatically clean up child processes when the session shuts down
 
 ## Install
@@ -46,7 +47,7 @@ Pi packages execute with your system permissions. Review the source before insta
 3. Use `subagent_events` when you need the raw trace, continuing from its `nextSequence` cursor and checking `cursorExpired`/`eventsDropped`.
 4. Send follow-up prompts or terminate the child.
 
-Writable children receive Pi's normal tool set. Read-only children are restricted to `read`, `grep`, `find`, and `ls`.
+Writable children receive Pi's normal tool set. Read-only children are restricted to `read`, `grep`, `find`, and `ls`. Children of Pi does not override child model or thinking settings and rejects RPC commands that mutate Pi settings.
 
 `subagent_result.answer`, `stopReason`, `status`, and `error` describe the latest agent run. `sessionUsage` and `sessionChangedFiles` are lifetime aggregates for the child session. Changed-file tracking is best-effort: it includes successful built-in `edit` and `write` calls, but cannot infer arbitrary filesystem changes made through Bash or custom tools.
 
