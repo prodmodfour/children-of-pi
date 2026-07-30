@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { applyResultEvent, createResultState, resultStatus, type ResultState } from "./result-state.ts";
+import { ChildBio, createChildIdentity } from "./child-bios.ts";
 import { assertAllowedChildRpcCommand } from "./rpc-policy.ts";
 import {
   renderEventsCall, renderEventsResult, renderKillCall, renderKillResult, renderListCall, renderListResult,
@@ -46,6 +47,11 @@ interface EventWaiter {
 
 interface ChildAgent {
   id: string;
+  instanceId: string;
+  ownerSessionId: string;
+  ownerParentSessionId: string;
+  address: string;
+  bio: ChildBio | null;
   process: ChildProcessWithoutNullStreams;
   cwd: string;
   write: boolean;
@@ -453,6 +459,11 @@ function textPreview(value: string | null): string | null {
 function childSummary(child: ChildAgent): JsonObject {
   return {
     id: child.id,
+    instanceId: child.instanceId,
+    ownerSessionId: child.ownerSessionId,
+    ownerParentSessionId: child.ownerParentSessionId,
+    address: child.address,
+    bio: child.bio?.get() ?? null,
     pid: child.process.pid ?? null,
     cwd: child.cwd,
     write: child.write,
@@ -552,6 +563,7 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
       }
 
       const id = `agent-${++childNumber}`;
+      const identity = createChildIdentity(id, ctx.sessionManager.getSessionId());
       const args = ["--mode", "rpc", "--no-session"];
       if (!params.write) args.push("--tools", READ_ONLY_TOOLS);
       if (ctx.isProjectTrusted()) args.push("--approve");
@@ -570,7 +582,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
       });
 
       const child: ChildAgent = {
-        id,
+        ...identity,
+        bio: new ChildBio(),
         process: processHandle,
         cwd,
         write: params.write,
@@ -612,6 +625,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
         child.isStreaming = false;
         child.exitCode = code;
         child.exitSignal = exitSignal;
+        // A bio belongs to the live child context, not to the reusable display id.
+        child.bio = null;
         appendEvent(child, {
           type: "process_exit",
           code,
@@ -811,6 +826,11 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
 
       return renderJson({
         id: child.id,
+        instanceId: child.instanceId,
+        ownerSessionId: child.ownerSessionId,
+        ownerParentSessionId: child.ownerParentSessionId,
+        address: child.address,
+        bio: child.bio?.get() ?? null,
         status,
         answer: child.resultState.answer,
         stopReason: child.isStreaming ? null : child.resultState.stopReason,
