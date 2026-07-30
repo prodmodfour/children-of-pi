@@ -72,11 +72,11 @@ export function applyResultEvent(state: ResultState, event: Record<string, unkno
 export function resultStatus(
   isStreaming: boolean,
   alive: boolean,
-  exitCode: number | null,
+  _exitCode: number | null,
   stopReason: string | null,
 ): RunStatus {
-  if (isStreaming || stopReason === "toolUse") return "running";
-  if (!alive && exitCode !== 0) return "exited";
+  if (isStreaming) return "running";
+  if (!alive) return "exited";
   if (stopReason === "error") return "failed";
   if (stopReason === "aborted") return "aborted";
   return "settled";

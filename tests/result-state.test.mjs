@@ -49,6 +49,12 @@ test("failed edits are not reported as session changed files", () => {
   assert.deepEqual([...state.sessionChangedFiles], ["/tmp/project/b.ts"]);
 });
 
+test("settled toolUse and clean process exit use lifecycle status", () => {
+  assert.equal(resultStatus(false, true, null, "toolUse"), "settled");
+  assert.equal(resultStatus(false, false, 0, "stop"), "exited");
+  assert.equal(resultStatus(true, true, null, "error"), "running");
+});
+
 test("a second follow-up resets run fields but preserves session aggregates", () => {
   const state = createResultState();
   applyResultEvent(state, { type: "agent_start" }, "/tmp/project");
