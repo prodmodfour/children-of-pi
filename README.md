@@ -35,7 +35,7 @@ Pi packages execute with your system permissions. Review the source before insta
 | `subagent_spawn` | Start a persistent child agent, optionally with an initial task |
 | `subagent_rpc` | Send any supported Pi RPC command to a child |
 | `subagent_events` | Read or wait for structured child events (trace view) |
-| `subagent_result` | Wait for and return a compact answer, usage, status, errors, and changed files |
+| `subagent_result` | Wait for and return the latest run's answer/status/error plus session-wide usage and changed files |
 | `subagent_list` | List child agents with lifecycle state and answer previews |
 | `subagent_kill` | Terminate a child process |
 
@@ -47,6 +47,8 @@ Pi packages execute with your system permissions. Review the source before insta
 4. Send follow-up prompts or terminate the child.
 
 Writable children receive Pi's normal tool set. Read-only children are restricted to `read`, `grep`, `find`, and `ls`.
+
+`subagent_result.answer`, `stopReason`, `status`, and `error` describe the latest agent run. `sessionUsage` and `sessionChangedFiles` are lifetime aggregates for the child session. Changed-file tracking is best-effort: it includes successful built-in `edit` and `write` calls, but cannot infer arbitrary filesystem changes made through Bash or custom tools.
 
 ## Requirements
 

@@ -10,6 +10,7 @@ import {
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { applyResultEvent, createResultState, resultStatus, type ResultState } from "./result-state.ts";
 
 type JsonObject = Record<string, unknown>;
 
@@ -48,8 +49,7 @@ interface ChildAgent {
   exitSignal: NodeJS.Signals | null;
   stderr: string;
   lastAssistantText: string | null;
-  lastStopReason: string | null;
-  changedFiles: Set<string>;
+  resultState: ResultState;
   lastState: JsonObject | null;
   nextSequence: number;
   readCursor: number;
@@ -157,22 +157,14 @@ function cleanupWaiter(child: ChildAgent, waiter: EventWaiter): void {
 
 function appendEvent(child: ChildAgent, event: JsonObject): void {
   const type = String(event.type ?? "");
+  applyResultEvent(child.resultState, event, child.cwd);
   if (type === "agent_start") child.isStreaming = true;
   if (type === "agent_settled") child.isStreaming = false;
 
-  if (type === "message_end") {
-    const text = assistantText(event.message);
-    if (text !== null) {
-      child.lastAssistantText = text;
-      if (isJsonObject(event.message) && typeof event.message.stopReason === "string") {
-        child.lastStopReason = event.message.stopReason;
-      }
-    }
-  }
-
-  if (type === "tool_execution_start" && ["edit", "write"].includes(String(event.toolName))) {
-    const args = isJsonObject(event.args) ? event.args : null;
-    if (args && typeof args.path === "string") child.changedFiles.add(resolve(child.cwd, args.path));
+  if (type === "message_end" && isJsonObject(event.message) && event.message.role === "assistant") {
+    // Keep the compatibility cache synchronized, including textless failures,
+    // so a failed run can never return an earlier successful answer.
+    child.lastAssistantText = assistantText(event.message);
   }
 
   if (!shouldStoreEvent(event)) return;
@@ -555,8 +547,7 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
         exitSignal: null,
         stderr: "",
         lastAssistantText: null,
-        lastStopReason: null,
-        changedFiles: new Set(),
+        resultState: createResultState(),
         lastState: null,
         nextSequence: 0,
         readCursor: 0,
@@ -757,17 +748,22 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
         ? statsResponse.data
         : null;
       const tokens = stats && isJsonObject(stats.tokens) ? stats.tokens : null;
-      const error = child.alive || child.exitCode === 0
+      const processError = child.alive || child.exitCode === 0
         ? null
         : `Subagent exited (code=${child.exitCode}, signal=${child.exitSignal}).${child.stderr ? ` ${child.stderr}` : ""}`;
-      const status = child.isStreaming ? "running" : child.alive ? "settled" : "exited";
+      const status = resultStatus(
+        child.isStreaming,
+        child.alive,
+        child.exitCode,
+        child.resultState.stopReason,
+      );
 
       return renderJson({
         id: child.id,
         status,
-        answer: child.lastAssistantText,
-        stopReason: child.isStreaming ? null : child.lastStopReason,
-        usage: stats === null ? null : {
+        answer: child.resultState.answer,
+        stopReason: child.isStreaming ? null : child.resultState.stopReason,
+        sessionUsage: stats === null ? null : {
           inputTokens: tokens?.input ?? null,
           outputTokens: tokens?.output ?? null,
           cacheReadTokens: tokens?.cacheRead ?? null,
@@ -775,8 +771,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
           totalTokens: tokens?.total ?? null,
           cost: stats.cost ?? null,
         },
-        changedFiles: [...child.changedFiles],
-        error,
+        sessionChangedFiles: [...child.resultState.sessionChangedFiles],
+        error: processError ?? child.resultState.errorMessage,
         latestSequence: child.nextSequence,
       }, { id: child.id, latestSequence: child.nextSequence });
     },

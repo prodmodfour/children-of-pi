@@ -1,6 +1,7 @@
 {
   "name": "rpc-subagents",
   "version": "0.1.0",
+  "type": "module",
   "description": "Persistent RPC subagents for the Pi coding agent",
   "license": "MIT",
   "keywords": [
@@ -9,6 +10,9 @@
     "subagents",
     "rpc"
   ],
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/*.test.mjs"
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
