@@ -3,6 +3,13 @@ import { randomUUID } from "node:crypto";
 export const MAX_BIO_CODEPOINTS = 2_000;
 export const MAX_CHILD_BIO_HISTORY = 100;
 
+const CHILD_CONTEXT_REPLACEMENT_COMMANDS = new Set([
+  "new_session",
+  "switch_session",
+  "fork",
+  "clone",
+]);
+
 export type BioActor =
   | {
       kind: "human";
@@ -143,6 +150,17 @@ export function createChildIdentity(
     ownerParentSessionId: parsedOwnerSessionId,
     address: formatChildAddress(parsedOwnerSessionId, instanceId),
   };
+}
+
+export function isSuccessfulChildContextReplacement(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const response = value as Record<string, unknown>;
+  if (response.success !== true || !CHILD_CONTEXT_REPLACEMENT_COMMANDS.has(String(response.command))) {
+    return false;
+  }
+  const data = response.data;
+  return !(typeof data === "object" && data !== null && !Array.isArray(data)
+    && (data as Record<string, unknown>).cancelled === true);
 }
 
 /** In-memory bio state owned by one live child process instance. */

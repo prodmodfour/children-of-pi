@@ -28,3 +28,27 @@ export function formatCost(value: unknown): string | null {
 export function accessMarker(write: unknown): "RO" | "RW" {
   return write === true ? "RW" : "RO";
 }
+
+export function formatBioActor(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "never";
+  const actor = value as Record<string, unknown>;
+  if (actor.kind === "parent" && typeof actor.sessionId === "string") {
+    const name = typeof actor.name === "string" && actor.name.length > 0 ? actor.name : "unnamed parent";
+    return `${name} (parent:${actor.sessionId})`;
+  }
+  if (actor.kind === "human" && (actor.via === "pi-tui" || actor.via === "whatspi")) {
+    return typeof actor.parentSessionId === "string"
+      ? `human via ${actor.via} (${actor.parentSessionId})`
+      : `human via ${actor.via}`;
+  }
+  if (actor.kind === "system" && (actor.reason === "context-reset" || actor.reason === "branch-change")) {
+    return `system/${actor.reason}`;
+  }
+  return "unknown";
+}
+
+export function isNonBlankBio(value: unknown): boolean {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value)
+    && typeof (value as Record<string, unknown>).text === "string"
+    && ((value as Record<string, unknown>).text as string).length > 0);
+}

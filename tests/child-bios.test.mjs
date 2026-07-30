@@ -6,6 +6,7 @@ import {
   createAgentBio,
   createChildIdentity,
   formatChildAddress,
+  isSuccessfulChildContextReplacement,
   normalizeBioText,
   parseExternalBioActor,
 } from "../child-bios.ts";
@@ -120,6 +121,35 @@ test("successful context replacement clears the bio with a system audit revision
     stale: false,
   });
   assert.equal(bio.history().length, 2);
+});
+
+test("only successful, non-cancelled full-session replacements reset context", () => {
+  for (const command of ["new_session", "switch_session", "fork", "clone"]) {
+    assert.equal(isSuccessfulChildContextReplacement({
+      type: "response", command, success: true, data: { cancelled: false },
+    }), true);
+  }
+  assert.equal(isSuccessfulChildContextReplacement({
+    type: "response", command: "new_session", success: false,
+  }), false);
+  assert.equal(isSuccessfulChildContextReplacement({
+    type: "response", command: "new_session", success: true, data: { cancelled: true },
+  }), false);
+  assert.equal(isSuccessfulChildContextReplacement({
+    type: "response", command: "compact", success: true,
+  }), false);
+  assert.equal(isSuccessfulChildContextReplacement({
+    type: "response", command: "set_model", success: true,
+  }), false);
+});
+
+test("compaction and ordinary work preserve a child bio", () => {
+  const bio = new ChildBio(() => "2026-07-30T00:00:00.000Z");
+  bio.set("context retained through compaction", parent(), { expectedRevision: 0 });
+  const compactionResponse = { type: "response", command: "compact", success: true };
+  if (isSuccessfulChildContextReplacement(compactionResponse)) bio.resetContext();
+  assert.equal(bio.get().text, "context retained through compaction");
+  assert.equal(bio.get().revision, 1);
 });
 
 test("child audit history is bounded and returned as defensive copies", () => {

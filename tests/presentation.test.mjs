@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { accessMarker, formatCost, formatTokens, preview } from "../ui/format.ts";
+import {
+  accessMarker, formatBioActor, formatCost, formatTokens, isNonBlankBio, preview,
+} from "../ui/format.ts";
 import { extractResultText, parseJsonResult, summarizeEvents } from "../ui/parse-result.ts";
 import { classifyChild, footerParts, footerText, footerTone } from "../ui/status.ts";
 
@@ -104,6 +106,15 @@ test("event summaries preserve ranges and hasMore", () => {
   });
 });
 
+test("bio presentation helpers distinguish blank metadata and format audit actors", () => {
+  assert.equal(isNonBlankBio({ text: "", revision: 0 }), false);
+  assert.equal(isNonBlankBio({ text: "knows the replay path", revision: 1 }), true);
+  assert.equal(formatBioActor({ kind: "parent", sessionId: "abc", name: "Planner" }), "Planner (parent:abc)");
+  assert.equal(formatBioActor({ kind: "human", via: "pi-tui", parentSessionId: "abc" }), "human via pi-tui (abc)");
+  assert.equal(formatBioActor({ kind: "system", reason: "context-reset" }), "system/context-reset");
+  assert.equal(formatBioActor(null), "never");
+});
+
 test("formatting is deterministic, unicode-safe, and labels session aggregates explicitly", async () => {
   assert.equal(formatTokens(950), "950");
   assert.equal(formatTokens(1_200), "1.2k");
@@ -115,4 +126,8 @@ test("formatting is deterministic, unicode-safe, and labels session aggregates e
   const source = await import("node:fs/promises").then((fs) => fs.readFile(new URL("../ui/renderers.ts", import.meta.url), "utf8"));
   assert.match(source, /Session usage:/);
   assert.match(source, /Session changed files/);
+  assert.match(source, /Blank bios add no collapsed noise/);
+  assert.match(source, /Updated by:/);
+  assert.match(source, /Updated at:/);
+  assert.match(source, /Revision /);
 });
