@@ -1,4 +1,12 @@
 const UI_SETTING_COMMANDS = new Set(["setStatus", "setWidget", "setTitle"]);
+const READ_ONLY_TOOLS = "read,grep,find,ls";
+
+export function childPiSpawnArgs(write: boolean, projectTrusted: boolean): string[] {
+  const args = ["--mode", "rpc", "--no-session"];
+  if (!write) args.push("--tools", READ_ONLY_TOOLS);
+  if (projectTrusted) args.push("--approve");
+  return args;
+}
 
 export function assertAllowedChildRpcCommand(command: Record<string, unknown>): void {
   const type = String(command.type ?? "");

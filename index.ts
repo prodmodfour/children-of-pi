@@ -18,7 +18,12 @@ import {
   isSuccessfulChildContextReplacement,
   type BioMutationResult,
 } from "./child-bios.ts";
-import { assertAllowedChildRpcCommand } from "./rpc-policy.ts";
+import {
+  createChildrenOfPiBridge,
+  type BridgeChild,
+  type ChildChange,
+} from "./child-bridge.ts";
+import { assertAllowedChildRpcCommand, childPiSpawnArgs } from "./rpc-policy.ts";
 import {
   renderBioCall, renderBioResult, renderEventsCall, renderEventsResult, renderKillCall, renderKillResult,
   renderListCall, renderListResult, renderResultCall, renderResultResult, renderRpcCall, renderRpcResult,
@@ -37,6 +42,7 @@ interface StoredEvent {
 }
 
 interface PendingRequest {
+  commandType: string;
   resolve: (response: JsonObject) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -80,9 +86,9 @@ interface ChildAgent {
   closed: Promise<void>;
   resolveClosed: () => void;
   refreshStatus: () => void;
+  notifyChange: (change: ChildChange) => void;
 }
 
-const READ_ONLY_TOOLS = "read,grep,find,ls";
 const MAX_STORED_EVENTS = 2_000;
 const MAX_STORED_EVENT_BYTES = 5 * 1024 * 1024;
 // Leave room for the response envelope and renderJson's truncation notice.
@@ -190,6 +196,10 @@ function appendEvent(child: ChildAgent, event: JsonObject): void {
   if (["agent_start", "agent_settled", "message_end", "process_exit", "process_error"].includes(type)) {
     child.refreshStatus();
   }
+  if (["agent_start", "agent_settled", "process_error"].includes(type)) {
+    child.notifyChange("lifecycle");
+  }
+  if (type === "process_exit") child.notifyChange("exit");
 
   if (!shouldStoreEvent(event)) return;
 
@@ -271,8 +281,9 @@ function attachJsonlReader(child: ChildAgent): void {
         ) {
           child.lastAssistantText = value.data.text as string | null;
         }
-        if (isSuccessfulChildContextReplacement(value) && child.bio) {
+        if (isSuccessfulChildContextReplacement(pending.commandType, value) && child.bio) {
           child.bio.resetContext();
+          child.notifyChange("context-reset");
         }
 
         pending.resolve(value);
@@ -360,6 +371,7 @@ async function sendRpc(
     }, timeoutMs);
 
     const pending: PendingRequest = {
+      commandType,
       timer,
       resolve: (response) => {
         if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
@@ -490,6 +502,24 @@ function childSummary(child: ChildAgent): JsonObject {
   };
 }
 
+function bridgeChildSummary(child: ChildAgent): JsonObject {
+  if (!child.alive || !child.bio) {
+    throw new Error(`Cannot project dead child ${child.instanceId} onto the live-child bridge.`);
+  }
+  return {
+    address: child.address,
+    displayId: child.id,
+    instanceId: child.instanceId,
+    ownerSessionId: child.ownerSessionId,
+    state: classifyChild({
+      alive: child.alive,
+      isStreaming: child.isStreaming,
+      stopReason: child.resultState.stopReason,
+    }),
+    bio: child.bio.get(),
+  };
+}
+
 const SpawnParameters = Type.Object({
   task: Type.Optional(Type.String({ description: "Initial task. Omit to start an idle child." })),
   write: Type.Boolean({
@@ -553,6 +583,18 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
   const children = new Map<string, ChildAgent>();
   let childNumber = 0;
   let tuiUi: ExtensionUIContext | null = null;
+  let activeOwnerSessionId: string | null = null;
+
+  const createBridge = () => createChildrenOfPiBridge({
+    events: pi.events,
+    getOwnerSessionId: () => activeOwnerSessionId,
+    listChildren: () => [...children.values()],
+    getChildByInstanceId: (instanceId) =>
+      [...children.values()].find((child) => child.instanceId === instanceId),
+    summarizeChild: (child: BridgeChild) => bridgeChildSummary(child as ChildAgent),
+    onBioChanged: (child: BridgeChild) => (child as ChildAgent).notifyChange("bio"),
+  });
+  let bridge: ReturnType<typeof createChildrenOfPiBridge> | null = createBridge();
 
   const refreshFooter = () => {
     if (!tuiUi) return;
@@ -627,9 +669,7 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
 
       const id = `agent-${++childNumber}`;
       const identity = createChildIdentity(id, ctx.sessionManager.getSessionId());
-      const args = ["--mode", "rpc", "--no-session"];
-      if (!params.write) args.push("--tools", READ_ONLY_TOOLS);
-      if (ctx.isProjectTrusted()) args.push("--approve");
+      const args = childPiSpawnArgs(params.write, ctx.isProjectTrusted());
 
       const invocation = getPiInvocation(args);
       const processHandle = spawn(invocation.command, invocation.args, {
@@ -669,6 +709,7 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
         closed,
         resolveClosed,
         refreshStatus: refreshFooter,
+        notifyChange: (change) => bridge?.emitChanged(change, child),
       };
       children.set(id, child);
       refreshFooter();
@@ -704,6 +745,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
         child.resolveClosed();
       });
 
+      child.notifyChange("spawn");
+
       const abortSpawn = () => void stopChild(child);
       if (signal) {
         if (signal.aborted) abortSpawn();
@@ -713,7 +756,14 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
       try {
         onUpdate?.({
           content: [{ type: "text", text: `Starting ${id}...` }],
-          details: { id, cwd, write: params.write },
+          details: {
+            id,
+            instanceId: child.instanceId,
+            ownerSessionId: child.ownerSessionId,
+            address: child.address,
+            cwd,
+            write: params.write,
+          },
         });
 
         const stateResponse = await sendRpc(child, { type: "get_state" }, DEFAULT_RPC_TIMEOUT_MS, signal);
@@ -776,11 +826,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const child = getLiveChild(params.id);
       if (params.action === "get") {
-        return renderJson(childBioPayload(child, "get"), {
-          id: child.id,
-          instanceId: child.instanceId,
-          action: "get",
-        });
+        const payload = childBioPayload(child, "get");
+        return renderJson(payload, payload);
       }
       if (params.action === "set" && params.bio === undefined) {
         throw new Error("subagent_bio action=set requires bio text.");
@@ -799,13 +846,9 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
       const mutation = params.action === "set"
         ? child.bio.set(params.bio, actor, options)
         : child.bio.clear(actor, options);
+      if (mutation.success) child.notifyChange("bio");
       const payload = childBioPayload(child, params.action, mutation);
-      return renderJson(payload, {
-        id: child.id,
-        instanceId: child.instanceId,
-        action: params.action,
-        conflict: mutation.success ? false : true,
-      });
+      return renderJson(payload, payload);
     },
     renderCall: renderBioCall,
     renderResult: renderBioResult,
@@ -1039,6 +1082,7 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
           );
           return;
         }
+        child.notifyChange("bio");
         ctx.ui.notify(`${child.id} bio saved at revision ${mutation.bio.revision}.`, "info");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
@@ -1047,6 +1091,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
   });
 
   pi.on("session_start", (_event, ctx) => {
+    activeOwnerSessionId = ctx.sessionManager.getSessionId();
+    if (!bridge) bridge = createBridge();
     if (ctx.mode === "tui" && process.env.PI_RPC_SUBAGENT !== "1") {
       tuiUi = ctx.ui;
       refreshFooter();
@@ -1060,5 +1106,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
     tuiUi = null;
     await Promise.all([...children.values()].map((child) => stopChild(child)));
     children.clear();
+    activeOwnerSessionId = null;
+    bridge?.dispose();
+    bridge = null;
   });
 }

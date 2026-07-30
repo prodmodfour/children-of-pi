@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertAllowedChildRpcCommand } from "../rpc-policy.ts";
+import { assertAllowedChildRpcCommand, childPiSpawnArgs } from "../rpc-policy.ts";
+
+test("child spawn preserves local settings and never inherits parent model or thinking flags", () => {
+  assert.deepEqual(childPiSpawnArgs(true, false), ["--mode", "rpc", "--no-session"]);
+  assert.deepEqual(childPiSpawnArgs(false, true), [
+    "--mode", "rpc", "--no-session", "--tools", "read,grep,find,ls", "--approve",
+  ]);
+  for (const args of [childPiSpawnArgs(true, true), childPiSpawnArgs(false, false)]) {
+    assert.equal(args.includes("--provider"), false);
+    assert.equal(args.includes("--model"), false);
+    assert.equal(args.includes("--thinking"), false);
+  }
+});
 
 test("child model, thinking, and Pi setting changes are rejected", () => {
   for (const type of [

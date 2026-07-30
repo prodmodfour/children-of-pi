@@ -152,15 +152,19 @@ export function createChildIdentity(
   };
 }
 
-export function isSuccessfulChildContextReplacement(value: unknown): boolean {
+export function isSuccessfulChildContextReplacement(commandType: unknown, value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const response = value as Record<string, unknown>;
-  if (response.success !== true || !CHILD_CONTEXT_REPLACEMENT_COMMANDS.has(String(response.command))) {
-    return false;
-  }
+  // The correlated pending request is authoritative. Never let an echoed or
+  // unsolicited response.command value choose which local state is reset.
+  if (
+    response.type !== "response"
+    || response.success !== true
+    || !CHILD_CONTEXT_REPLACEMENT_COMMANDS.has(String(commandType))
+  ) return false;
   const data = response.data;
-  return !(typeof data === "object" && data !== null && !Array.isArray(data)
-    && (data as Record<string, unknown>).cancelled === true);
+  return typeof data === "object" && data !== null && !Array.isArray(data)
+    && (data as Record<string, unknown>).cancelled === false;
 }
 
 /** In-memory bio state owned by one live child process instance. */

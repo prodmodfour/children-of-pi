@@ -125,21 +125,27 @@ test("successful context replacement clears the bio with a system audit revision
 
 test("only successful, non-cancelled full-session replacements reset context", () => {
   for (const command of ["new_session", "switch_session", "fork", "clone"]) {
-    assert.equal(isSuccessfulChildContextReplacement({
-      type: "response", command, success: true, data: { cancelled: false },
+    assert.equal(isSuccessfulChildContextReplacement(command, {
+      type: "response", command: "malformed-echo-is-ignored", success: true, data: { cancelled: false },
     }), true);
   }
-  assert.equal(isSuccessfulChildContextReplacement({
+  assert.equal(isSuccessfulChildContextReplacement("new_session", {
     type: "response", command: "new_session", success: false,
   }), false);
-  assert.equal(isSuccessfulChildContextReplacement({
+  assert.equal(isSuccessfulChildContextReplacement("new_session", {
     type: "response", command: "new_session", success: true, data: { cancelled: true },
   }), false);
-  assert.equal(isSuccessfulChildContextReplacement({
-    type: "response", command: "compact", success: true,
+  assert.equal(isSuccessfulChildContextReplacement("new_session", {
+    type: "response", command: "new_session", success: true,
   }), false);
-  assert.equal(isSuccessfulChildContextReplacement({
-    type: "response", command: "set_model", success: true,
+  assert.equal(isSuccessfulChildContextReplacement("new_session", {
+    type: "event", command: "new_session", success: true, data: { cancelled: false },
+  }), false);
+  assert.equal(isSuccessfulChildContextReplacement("compact", {
+    type: "response", command: "new_session", success: true,
+  }), false);
+  assert.equal(isSuccessfulChildContextReplacement("set_model", {
+    type: "response", command: "new_session", success: true,
   }), false);
 });
 
@@ -147,7 +153,7 @@ test("compaction and ordinary work preserve a child bio", () => {
   const bio = new ChildBio(() => "2026-07-30T00:00:00.000Z");
   bio.set("context retained through compaction", parent(), { expectedRevision: 0 });
   const compactionResponse = { type: "response", command: "compact", success: true };
-  if (isSuccessfulChildContextReplacement(compactionResponse)) bio.resetContext();
+  if (isSuccessfulChildContextReplacement("compact", compactionResponse)) bio.resetContext();
   assert.equal(bio.get().text, "context retained through compaction");
   assert.equal(bio.get().revision, 1);
 });

@@ -113,7 +113,9 @@ export function renderBioCall(args: any, theme: any): Text {
 }
 
 export function renderBioResult(result: TextResultLike, options: any, theme: any): Text | Container {
-  const { raw, value } = parseJsonResult(result);
+  const parsed = parseJsonResult(result);
+  const raw = parsed.raw;
+  const value = parsed.value ?? object(result.details);
   if (!value) return rawText(result);
   const action = string(value.action, "get");
   const bio = bioRecord(value.bio ?? value.current);
