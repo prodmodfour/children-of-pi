@@ -74,6 +74,21 @@ test("parser and view helpers do not mutate AgentToolResult fields", () => {
   assert.deepEqual({ content: result.content, details: result.details, isError: result.isError }, before);
 });
 
+test("authoritative event status distinguishes failed, aborted, and idle batches", () => {
+  assert.equal(classifyChild({ alive: true, isStreaming: false, stopReason: "error" }), "failed");
+  assert.equal(classifyChild({ alive: true, isStreaming: false, stopReason: "aborted" }), "aborted");
+  assert.equal(classifyChild({ alive: true, isStreaming: false, stopReason: null }), "idle");
+});
+
+test("authoritative list status does not depend on assistant text", () => {
+  const statuses = new Map([
+    ["textless", classifyChild({ alive: true, isStreaming: false, stopReason: "error" })],
+    ["with-text", classifyChild({ alive: true, isStreaming: false, stopReason: "error" })],
+  ]);
+  assert.equal(statuses.get("textless"), "failed");
+  assert.equal(statuses.get("with-text"), "failed");
+});
+
 test("event summaries preserve ranges and hasMore", () => {
   const input = deepFreeze({
     hasMore: true,

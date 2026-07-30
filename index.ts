@@ -16,7 +16,7 @@ import {
   renderEventsCall, renderEventsResult, renderKillCall, renderKillResult, renderListCall, renderListResult,
   renderResultCall, renderResultResult, renderRpcCall, renderRpcResult, renderSpawnCall, renderSpawnResult,
 } from "./ui/renderers.ts";
-import { footerParts, footerText, footerTone } from "./ui/status.ts";
+import { classifyChild, footerParts, footerText, footerTone } from "./ui/status.ts";
 
 type JsonObject = Record<string, unknown>;
 
@@ -766,7 +766,15 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
       }, { id: child.id, nextSequence });
     },
     renderCall: renderEventsCall,
-    renderResult: renderEventsResult,
+    renderResult(result, options, theme, context) {
+      const child = children.get(context.args.id);
+      const status = child ? classifyChild({
+        alive: child.alive,
+        isStreaming: child.isStreaming,
+        stopReason: child.resultState.stopReason,
+      }) : undefined;
+      return renderEventsResult(result, options, theme, status);
+    },
   });
 
   pi.registerTool({
@@ -834,7 +842,14 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
       return renderJson({ children: [...children.values()].map(childSummary) });
     },
     renderCall: renderListCall,
-    renderResult: renderListResult,
+    renderResult(result, options, theme) {
+      const statuses = new Map([...children].map(([id, child]) => [id, classifyChild({
+        alive: child.alive,
+        isStreaming: child.isStreaming,
+        stopReason: child.resultState.stopReason,
+      })]));
+      return renderListResult(result, options, theme, statuses);
+    },
   });
 
   pi.registerTool({

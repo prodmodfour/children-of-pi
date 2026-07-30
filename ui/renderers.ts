@@ -2,6 +2,7 @@ import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { accessMarker, formatCost, formatTokens, preview, shortenHome } from "./format.ts";
 import { extractResultText, parseJsonResult, summarizeEvents, type JsonObject, type TextResultLike } from "./parse-result.ts";
+import type { ChildCategory } from "./status.ts";
 
 const object = (value: unknown): JsonObject | null => typeof value === "object" && value !== null && !Array.isArray(value) ? value as JsonObject : null;
 const string = (value: unknown, fallback = "") => typeof value === "string" ? value : fallback;
@@ -97,10 +98,10 @@ function eventTimeline(value: JsonObject, theme: any): string {
   }).map((line) => theme.fg("toolOutput", line)).join("\n");
 }
 
-export function renderEventsResult(result: TextResultLike, options: any, theme: any): Text | Container {
+export function renderEventsResult(result: TextResultLike, options: any, theme: any, authoritativeStatus?: ChildCategory): Text | Container {
   const { raw, value } = parseJsonResult(result); if (!value) return rawText(result);
   const summary = summarizeEvents(value); const running = value.alive !== false && value.isStreaming === true;
-  const status = value.alive === false ? "exited" : running ? "running" : "settled";
+  const status = authoritativeStatus ?? (value.alive === false ? "exited" : running ? "running" : "settled");
   const range = summary.count === 0 ? "no events" : summary.firstSequence === summary.lastSequence ? `#${summary.lastSequence}` : `#${summary.firstSequence}–#${summary.lastSequence}`;
   let text = `${icon(status, theme)} ${theme.fg("toolTitle", string(value.id, "subagent"))} ${status} · ${summary.count} events · ${range}`;
   const categories = [];
@@ -110,6 +111,7 @@ export function renderEventsResult(result: TextResultLike, options: any, theme: 
   if (summary.exits) categories.push(`${summary.exits} exit`);
   if (summary.protocolErrors) categories.push(`${summary.protocolErrors} errors`);
   if (summary.hasMore) categories.push("more available");
+  if (value.cursorExpired === true) categories.push(`cursor expired${typeof value.eventsDropped === "number" ? ` · ${value.eventsDropped} dropped` : ""}`);
   if (categories.length) text += `\n  ${theme.fg("dim", categories.join(" · "))}`;
   if (!options.expanded) return new Text(text, 0, 0);
   const container = new Container(); container.addChild(new Text(text, 0, 0));
@@ -135,22 +137,37 @@ export function renderResultResult(result: TextResultLike, options: any, theme: 
   if (error) { container.addChild(new Spacer(1)); container.addChild(new Text(theme.fg("error", error), 0, 0)); }
   if (answer) { container.addChild(new Spacer(1)); container.addChild(new Markdown(answer, 0, 0, getMarkdownTheme())); }
   if (files.length) { container.addChild(new Spacer(1)); container.addChild(new Text(theme.fg("muted", "Session changed files"), 0, 0)); container.addChild(new Text(files.map((file) => `  ${shortenHome(String(file))}`).join("\n"), 0, 0)); }
-  if (usage) container.addChild(new Text(theme.fg("dim", `Session usage: ${formatTokens(usage.totalTokens) ?? "?"} tokens${formatCost(usage.cost) ? ` · ${formatCost(usage.cost)}` : ""}`), 0, 0));
+  if (value.stopReason) container.addChild(new Text(theme.fg("dim", `Stop reason: ${String(value.stopReason)}`), 0, 0));
+  if (usage) {
+    const usageParts = [
+      `input ${formatTokens(usage.inputTokens) ?? "?"}`,
+      `output ${formatTokens(usage.outputTokens) ?? "?"}`,
+      `cache read ${formatTokens(usage.cacheReadTokens) ?? "?"}`,
+      `cache write ${formatTokens(usage.cacheWriteTokens) ?? "?"}`,
+      `total ${formatTokens(usage.totalTokens) ?? "?"}`,
+      formatCost(usage.cost),
+    ].filter(Boolean);
+    container.addChild(new Text(theme.fg("dim", `Session usage: ${usageParts.join(" · ")}`), 0, 0));
+  }
   container.addChild(new Text(theme.fg("dim", `Latest event #${String(value.latestSequence ?? "?")}`), 0, 0));
+  expandedRaw(container, raw, theme);
   return container;
 }
 
 export function renderListCall(_args: any, theme: any): Text { return new Text(theme.fg("toolTitle", theme.bold("List subagents")), 0, 0); }
 
-export function renderListResult(result: TextResultLike, options: any, theme: any): Text | Container {
+export function renderListResult(result: TextResultLike, options: any, theme: any, authoritativeStatuses?: ReadonlyMap<string, ChildCategory>): Text | Container {
   const { raw, value } = parseJsonResult(result); if (!value || !Array.isArray(value.children)) return rawText(result);
   const children = value.children.map(object).filter((child): child is JsonObject => child !== null);
-  const statusOf = (child: JsonObject) => child.alive === false ? "exited" : child.isStreaming === true ? "running" : object(child.state)?.stopReason === "error" ? "failed" : object(child.state)?.stopReason === "aborted" ? "aborted" : child.lastAssistantTextPreview ? "settled" : "idle";
+  const statusOf = (child: JsonObject): ChildCategory => authoritativeStatuses?.get(string(child.id))
+    ?? (child.alive === false ? "exited" : child.isStreaming === true ? "running" : child.lastAssistantTextPreview ? "settled" : "idle");
   const counts = new Map<string, number>(); for (const child of children) counts.set(statusOf(child), (counts.get(statusOf(child)) ?? 0) + 1);
   const summary = [...counts].map(([status, count]) => `${count} ${status}`).join(" · ") || "none";
   const shown = options.expanded ? children : children.slice(0, 4);
   const lines = shown.map((child) => {
-    const status = statusOf(child); return `${icon(status, theme)} ${string(child.id, "?").padEnd(9)} ${accessMarker(child.write)}  ${status.padEnd(8)} #${String(child.lastEventSequence ?? 0)}`;
+    const status = statusOf(child);
+    const access = child.write === true ? theme.fg("warning", accessMarker(child.write)) : theme.fg("accent", accessMarker(child.write));
+    return `${icon(status, theme)} ${string(child.id, "?").padEnd(9)} ${access}  ${status.padEnd(8)} #${String(child.lastEventSequence ?? 0)}`;
   });
   let text = `${theme.fg("toolTitle", theme.bold("Subagents"))} · ${theme.fg("dim", summary)}${lines.length ? `\n  ${lines.join("\n  ")}` : ""}`;
   if (!options.expanded && children.length > shown.length) text += `\n  ${theme.fg("muted", `… ${children.length - shown.length} more`)}`;
