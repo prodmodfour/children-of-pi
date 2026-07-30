@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyResultEvent, createResultState, resultStatus } from "../result-state.ts";
+import {
+  applyResultEvent,
+  createResultState,
+  resetContextScopedResultCaches,
+  resultStatus,
+} from "../result-state.ts";
 
 const assistantEnd = (content, stopReason, errorMessage) => ({
   type: "message_end",
@@ -47,6 +52,38 @@ test("failed edits are not reported as session changed files", () => {
   }, "/tmp/project");
 
   assert.deepEqual([...state.sessionChangedFiles], ["/tmp/project/b.ts"]);
+});
+
+test("full context replacement clears every context-scoped result cache only", () => {
+  const resultState = createResultState();
+  resultState.answer = "old answer";
+  resultState.stopReason = "error";
+  resultState.errorMessage = "old error";
+  resultState.pendingFileMutations.set("edit-1", "/tmp/project/pending.ts");
+  resultState.sessionChangedFiles.add("/tmp/project/changed.ts");
+  const caches = {
+    resultState,
+    lastAssistantText: "old compatibility answer",
+    lastState: { sessionId: "old-session" },
+    nextSequence: 42,
+    events: [{ sequence: 42 }],
+    instanceId: "stable-instance",
+    usage: { inputTokens: 123 },
+  };
+
+  resetContextScopedResultCaches(caches);
+
+  assert.equal(resultState.answer, null);
+  assert.equal(resultState.stopReason, null);
+  assert.equal(resultState.errorMessage, null);
+  assert.equal(resultState.pendingFileMutations.size, 0);
+  assert.equal(resultState.sessionChangedFiles.size, 0);
+  assert.equal(caches.lastAssistantText, null);
+  assert.equal(caches.lastState, null);
+  assert.equal(caches.nextSequence, 42);
+  assert.deepEqual(caches.events, [{ sequence: 42 }]);
+  assert.equal(caches.instanceId, "stable-instance");
+  assert.deepEqual(caches.usage, { inputTokens: 123 });
 });
 
 test("settled toolUse and clean process exit use lifecycle status", () => {

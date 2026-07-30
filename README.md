@@ -15,7 +15,7 @@ A [Pi](https://github.com/earendil-works/pi-mono) extension for running persiste
 - Address each child unambiguously with a UUID-backed instance address
 - Integrate local parent networks through the optional pi-panda event-bus bridge
 - Use each child Pi's configured model, thinking level, and settings without overriding them
-- Inherit project trust from the parent
+- Inherit parent project trust only for the same canonical working directory
 - Automatically clean up child processes when the session shuts down
 
 ## Install
@@ -51,7 +51,9 @@ Pi packages execute with your system permissions. Review the source before insta
 3. Use `subagent_events` when you need the raw trace, continuing from its `nextSequence` cursor and checking `cursorExpired`/`eventsDropped`.
 4. Send follow-up prompts or terminate the child.
 
-Writable children receive Pi's normal tool set. Read-only children are restricted to `read`, `grep`, `find`, and `ls`. Children of Pi does not override child model or thinking settings and rejects RPC commands that mutate Pi settings.
+Writable children receive Pi's normal tool set. Read-only children are restricted to `read`, `grep`, `find`, and `ls`, and direct RPC `bash` commands are rejected. Children of Pi does not override child model or thinking settings and rejects RPC commands that mutate Pi settings.
+
+Every child receives an explicit project-trust flag. Parent trust is inherited only when the requested child cwd and the parent's cwd resolve to the same canonical directory; a different or unresolvable cwd is started with project resources unapproved.
 
 `subagent_result.answer`, `stopReason`, `status`, and `error` describe the latest agent run. `sessionUsage` and `sessionChangedFiles` are lifetime aggregates for the child session. Changed-file tracking is best-effort: it includes successful built-in `edit` and `write` calls, but cannot infer arbitrary filesystem changes made through Bash or custom tools.
 
@@ -60,7 +62,7 @@ Writable children receive Pi's normal tool set. Read-only children are restricte
 The familiar display ID (`agent-1`, `agent-2`, …) is convenient but is process-local and may be reused after the extension restarts. Every spawn also receives a random `instanceId`. Its canonical address is:
 
 ```text
-child:<owner-parent-session-id>:<instance-id>
+child:<owner-session-id>:<instance-id>
 ```
 
 Machine summaries from `subagent_spawn`, `subagent_list`, and `subagent_result` add `instanceId`, `ownerSessionId`, `ownerParentSessionId`, `address`, and `bio` without changing existing fields. Use `address` or `instanceId`, never a display ID alone, as a durable remote reference.

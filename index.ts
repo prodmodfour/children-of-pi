@@ -11,7 +11,13 @@ import {
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { applyResultEvent, createResultState, resultStatus, type ResultState } from "./result-state.ts";
+import {
+  applyResultEvent,
+  createResultState,
+  resetContextScopedResultCaches,
+  resultStatus,
+  type ResultState,
+} from "./result-state.ts";
 import {
   ChildBio,
   createChildIdentity,
@@ -23,7 +29,11 @@ import {
   type BridgeChild,
   type ChildChange,
 } from "./child-bridge.ts";
-import { assertAllowedChildRpcCommand, childPiSpawnArgs } from "./rpc-policy.ts";
+import {
+  assertAllowedChildRpcCommand,
+  childPiSpawnArgs,
+  isSameCanonicalDirectory,
+} from "./rpc-policy.ts";
 import {
   renderBioCall, renderBioResult, renderEventsCall, renderEventsResult, renderKillCall, renderKillResult,
   renderListCall, renderListResult, renderResultCall, renderResultResult, renderRpcCall, renderRpcResult,
@@ -281,8 +291,9 @@ function attachJsonlReader(child: ChildAgent): void {
         ) {
           child.lastAssistantText = value.data.text as string | null;
         }
-        if (isSuccessfulChildContextReplacement(pending.commandType, value) && child.bio) {
-          child.bio.resetContext();
+        if (isSuccessfulChildContextReplacement(pending.commandType, value)) {
+          child.bio?.resetContext();
+          resetContextScopedResultCaches(child);
           child.notifyChange("context-reset");
         }
 
@@ -669,7 +680,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
 
       const id = `agent-${++childNumber}`;
       const identity = createChildIdentity(id, ctx.sessionManager.getSessionId());
-      const args = childPiSpawnArgs(params.write, ctx.isProjectTrusted());
+      const inheritsProjectTrust = isSameCanonicalDirectory(ctx.cwd, cwd) && ctx.isProjectTrusted();
+      const args = childPiSpawnArgs(params.write, inheritsProjectTrust);
 
       const invocation = getPiInvocation(args);
       const processHandle = spawn(invocation.command, invocation.args, {
@@ -807,7 +819,7 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
     async execute(_toolCallId, params, signal) {
       const child = getChild(params.id);
       if (!isJsonObject(params.command)) throw new Error("command must be a JSON object.");
-      assertAllowedChildRpcCommand(params.command);
+      assertAllowedChildRpcCommand(params.command, child.write);
       const response = await sendRpc(child, params.command, params.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS, signal);
       return renderJson({ id: child.id, response }, { id: child.id });
     },

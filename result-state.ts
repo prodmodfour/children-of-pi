@@ -20,6 +20,27 @@ export function createResultState(): ResultState {
   };
 }
 
+export interface ContextScopedResultCaches {
+  resultState: ResultState;
+  lastAssistantText: string | null;
+  lastState: Record<string, unknown> | null;
+}
+
+function resetLatestRunResult(state: ResultState): void {
+  state.answer = null;
+  state.stopReason = null;
+  state.errorMessage = null;
+  state.pendingFileMutations.clear();
+}
+
+/** Clear result caches whose meaning is invalidated by a full context replacement. */
+export function resetContextScopedResultCaches(caches: ContextScopedResultCaches): void {
+  resetLatestRunResult(caches.resultState);
+  caches.resultState.sessionChangedFiles.clear();
+  caches.lastAssistantText = null;
+  caches.lastState = null;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -39,10 +60,7 @@ export function applyResultEvent(state: ResultState, event: Record<string, unkno
 
   if (type === "agent_start") {
     // Result fields describe the latest run. Session aggregates remain intact.
-    state.answer = null;
-    state.stopReason = null;
-    state.errorMessage = null;
-    state.pendingFileMutations.clear();
+    resetLatestRunResult(state);
     return;
   }
 
