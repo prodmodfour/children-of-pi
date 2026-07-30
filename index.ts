@@ -18,6 +18,7 @@ type WaitMode = "none" | "event" | "settled";
 interface StoredEvent {
   sequence: number;
   event: JsonObject;
+  bytes: number;
 }
 
 interface PendingRequest {
@@ -51,6 +52,8 @@ interface ChildAgent {
   nextSequence: number;
   readCursor: number;
   events: StoredEvent[];
+  eventBytes: number;
+  droppedThrough: number;
   pending: Map<string, PendingRequest>;
   waiters: Set<EventWaiter>;
   closed: Promise<void>;
@@ -59,6 +62,9 @@ interface ChildAgent {
 
 const READ_ONLY_TOOLS = "read,grep,find,ls";
 const MAX_STORED_EVENTS = 2_000;
+const MAX_STORED_EVENT_BYTES = 5 * 1024 * 1024;
+// Leave room for the response envelope and renderJson's truncation notice.
+const EVENT_RESPONSE_BUDGET_BYTES = DEFAULT_MAX_BYTES - 4 * 1024;
 const MAX_STDERR_BYTES = 50 * 1024;
 const DEFAULT_RPC_TIMEOUT_MS = 120_000;
 const DEFAULT_WAIT_TIMEOUT_MS = 60_000;
@@ -158,12 +164,26 @@ function appendEvent(child: ChildAgent, event: JsonObject): void {
 
   if (!shouldStoreEvent(event)) return;
 
-  const item: StoredEvent = {
+  const item = {
     sequence: ++child.nextSequence,
     event,
-  };
+  } as StoredEvent;
+  Object.defineProperty(item, "bytes", {
+    value: Buffer.byteLength(JSON.stringify(event), "utf8"),
+    enumerable: false,
+  });
   child.events.push(item);
-  if (child.events.length > MAX_STORED_EVENTS) child.events.shift();
+  child.eventBytes += item.bytes;
+  while (
+    child.events.length > MAX_STORED_EVENTS
+    || child.eventBytes > MAX_STORED_EVENT_BYTES
+    || item.bytes > EVENT_RESPONSE_BUDGET_BYTES
+  ) {
+    const dropped = child.events.shift();
+    if (!dropped) break;
+    child.eventBytes -= dropped.bytes;
+    child.droppedThrough = dropped.sequence;
+  }
 
   for (const waiter of [...child.waiters]) {
     if (item.sequence > waiter.after && waiter.predicate(item)) {
@@ -283,15 +303,19 @@ async function sendRpc(
   const id = `subagent_${child.id}_${++requestNumber}`;
   const payload = { ...command, id };
 
-  if (["prompt", "steer", "follow_up"].includes(commandType)) {
-    child.isStreaming = true;
-  }
+  const changesStreaming = ["prompt", "steer", "follow_up"].includes(commandType);
+  const previousStreaming = child.isStreaming;
+  if (changesStreaming) child.isStreaming = true;
+  const restoreStreaming = () => {
+    if (changesStreaming) child.isStreaming = previousStreaming;
+  };
 
   return new Promise<JsonObject>((resolveResponse, rejectResponse) => {
     let abortHandler: (() => void) | undefined;
     const timer = setTimeout(() => {
       child.pending.delete(id);
       if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
+      restoreStreaming();
       rejectResponse(new Error(`Timed out waiting for ${commandType} response from ${child.id}.`));
     }, timeoutMs);
 
@@ -299,10 +323,12 @@ async function sendRpc(
       timer,
       resolve: (response) => {
         if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
+        if (response.success !== true) restoreStreaming();
         resolveResponse(response);
       },
       reject: (error) => {
         if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
+        restoreStreaming();
         rejectResponse(error);
       },
     };
@@ -314,6 +340,7 @@ async function sendRpc(
         if (!current) return;
         child.pending.delete(id);
         clearTimeout(current.timer);
+        restoreStreaming();
         rejectResponse(new Error(`RPC request to ${child.id} was cancelled.`));
       };
       if (signal.aborted) {
@@ -507,6 +534,8 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
         nextSequence: 0,
         readCursor: 0,
         events: [],
+        eventBytes: 0,
+        droppedThrough: 0,
         pending: new Map(),
         waiters: new Set(),
         closed,
@@ -622,25 +651,58 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
 
       const available = matching();
       const limit = params.limit ?? 100;
-      const returned = available.slice(0, limit);
-      if (returned.length > 0) {
-        child.readCursor = returned[returned.length - 1].sequence;
+      const oldestSequence = child.events[0]?.sequence ?? child.nextSequence + 1;
+      const cursorExpired = after < oldestSequence - 1;
+      const returned: StoredEvent[] = [];
+
+      // Budget the actual pretty-printed response, rather than selecting by count
+      // and relying on renderJson to silently discard the tail.
+      for (const item of available.slice(0, limit)) {
+        const candidate = [...returned, item];
+        const probe = {
+          id: child.id,
+          alive: child.alive,
+          isStreaming: child.isStreaming,
+          after,
+          oldestSequence,
+          nextSequence: item.sequence,
+          latestSequence: child.nextSequence,
+          cursorExpired,
+          eventsDropped: cursorExpired ? Math.max(0, oldestSequence - after - 1) : 0,
+          hasMore: available.length > candidate.length,
+          events: candidate,
+          lastAssistantText: child.lastAssistantText,
+          stderr: child.stderr || undefined,
+        };
+        const serialized = JSON.stringify(probe, null, 2);
+        const lines = serialized.split("\n").length;
+        if (
+          Buffer.byteLength(serialized, "utf8") > EVENT_RESPONSE_BUDGET_BYTES
+          || lines > DEFAULT_MAX_LINES - 50
+        ) break;
+        returned.push(item);
       }
 
-      const oldestSequence = child.events[0]?.sequence ?? child.nextSequence + 1;
+      const nextSequence = returned.at(-1)?.sequence ?? after;
+      if (params.after === undefined && returned.length > 0) {
+        child.readCursor = Math.max(child.readCursor, nextSequence);
+      }
+
       return renderJson({
         id: child.id,
         alive: child.alive,
         isStreaming: child.isStreaming,
         after,
         oldestSequence,
-        nextSequence: returned.at(-1)?.sequence ?? after,
+        nextSequence,
         latestSequence: child.nextSequence,
+        cursorExpired,
+        eventsDropped: cursorExpired ? Math.max(0, oldestSequence - after - 1) : 0,
         hasMore: available.length > returned.length,
         events: returned,
         lastAssistantText: child.lastAssistantText,
         stderr: child.stderr || undefined,
-      }, { id: child.id, nextSequence: returned.at(-1)?.sequence ?? after });
+      }, { id: child.id, nextSequence });
     },
   });
 

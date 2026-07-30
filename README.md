@@ -6,7 +6,8 @@ A [Pi](https://github.com/earendil-works/pi-mono) extension for running persiste
 
 - Spawn independent read-only or writable child agents
 - Send RPC commands while agents keep running in the background
-- Read structured events using sequence cursors
+- Read structured events using byte-budgeted sequence cursors
+- Detect expired cursors and dropped events after buffer rollover
 - Wait for activity or agent settlement
 - Inspect and terminate child processes
 - Inherit the parent model, thinking level, and project trust
@@ -39,8 +40,8 @@ Pi packages execute with your system permissions. Review the source before insta
 ## Example workflow
 
 1. Spawn a read-only child with a research task.
-2. Poll `subagent_events` with `wait: "settled"`.
-3. Read `lastAssistantText` or request additional state with `subagent_rpc`.
+2. Poll `subagent_events` with `wait: "settled"`; continue from its `nextSequence` cursor.
+3. Check `cursorExpired`/`eventsDropped` before consuming events, then read `lastAssistantText` or request additional state with `subagent_rpc`.
 4. Send follow-up prompts or terminate the child.
 
 Writable children receive Pi's normal tool set. Read-only children are restricted to `read`, `grep`, `find`, and `ls`.
