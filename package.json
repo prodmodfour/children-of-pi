@@ -1,0 +1,22 @@
+{
+  "name": "rpc-subagents",
+  "version": "0.1.0",
+  "description": "Persistent RPC subagents for the Pi coding agent",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "subagents",
+    "rpc"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
