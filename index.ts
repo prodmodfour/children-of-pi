@@ -525,12 +525,12 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
     })));
     const label = footerText(parts);
     if (!label) {
-      tuiUi.setStatus("rpc-subagents", undefined);
+      tuiUi.setStatus("children-of-pi", undefined);
       return;
     }
     const tone = footerTone(parts);
     const marker = tone === "error" ? "✗" : tone === "success" ? "✓" : tone === "muted" ? "○" : "●";
-    tuiUi.setStatus("rpc-subagents", `${tuiUi.theme.fg(tone, marker)} ${tuiUi.theme.fg("dim", label)}`);
+    tuiUi.setStatus("children-of-pi", `${tuiUi.theme.fg(tone, marker)} ${tuiUi.theme.fg("dim", label)}`);
   };
 
   const getChild = (id: string): ChildAgent => {
@@ -876,7 +876,7 @@ export default function rpcSubagents(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", async (_event, ctx) => {
     if (ctx.mode === "tui" && process.env.PI_RPC_SUBAGENT !== "1") {
-      ctx.ui.setStatus("rpc-subagents", undefined);
+      ctx.ui.setStatus("children-of-pi", undefined);
     }
     tuiUi = null;
     await Promise.all([...children.values()].map((child) => stopChild(child)));

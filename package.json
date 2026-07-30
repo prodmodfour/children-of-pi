@@ -1,5 +1,5 @@
 {
-  "name": "rpc-subagents",
+  "name": "children-of-pi",
   "version": "0.1.0",
   "type": "module",
   "description": "Persistent RPC subagents for the Pi coding agent",

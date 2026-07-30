@@ -1,4 +1,4 @@
-# rpc-subagents
+# children-of-pi
 
 A [Pi](https://github.com/earendil-works/pi-mono) extension for running persistent child agents through Pi's JSONL RPC mode.
 
@@ -17,13 +17,13 @@ A [Pi](https://github.com/earendil-works/pi-mono) extension for running persiste
 ## Install
 
 ```bash
-pi install git:github.com/prodmodfour/rpc-subagents
+pi install git:github.com/prodmodfour/children-of-pi
 ```
 
 To try it without installing:
 
 ```bash
-pi -e git:github.com/prodmodfour/rpc-subagents
+pi -e git:github.com/prodmodfour/children-of-pi
 ```
 
 Pi packages execute with your system permissions. Review the source before installing.
