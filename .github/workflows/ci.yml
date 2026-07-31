@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Node 22.19
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+
+      - name: Install clean peer and development dependencies
+        run: npm ci --ignore-scripts --include=dev --include=peer
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check TypeScript and imports
+        run: npm run check
+
+      - name: Validate package manifest and contents
+        run: npm run check:package
+
+      - name: Smoke-test a clean Pi extension load
+        run: npm run smoke

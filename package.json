@@ -4,6 +4,9 @@
   "type": "module",
   "description": "Persistent RPC subagents for the Pi coding agent",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "keywords": [
     "pi-package",
     "pi-extension",
@@ -11,13 +14,22 @@
     "rpc"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/*.test.mjs"
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "check:imports": "node --experimental-strip-types --input-type=module -e \"const { default: extension } = await import('./index.ts'); if (typeof extension !== 'function') throw new TypeError('Extension must export a default factory function');\"",
+    "check": "npm run typecheck && npm run check:imports",
+    "check:package": "node scripts/validate-package.mjs && npm pack --dry-run",
+    "smoke": "node scripts/smoke-extension.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "^5.9.3"
   },
   "pi": {
     "extensions": [
