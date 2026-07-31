@@ -1,5 +1,7 @@
 # children-of-pi
 
+[![CI](https://github.com/prodmodfour/children-of-pi/actions/workflows/ci.yml/badge.svg)](https://github.com/prodmodfour/children-of-pi/actions/workflows/ci.yml)
+
 A [Pi](https://github.com/earendil-works/pi-mono) extension for running persistent child agents through Pi's JSONL RPC mode.
 
 ## Features
